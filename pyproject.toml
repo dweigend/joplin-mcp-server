@@ -1,0 +1,53 @@
+[project]
+name = "joplin-mcp"
+version = "0.1.0"
+description = "Joplin MCP Server - A Model Context Protocol Server for Joplin"
+authors = [
+    { name = "David Weigend", email = "contact@weigend.studio" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["joplin", "mcp", "note-taking", "ai", "claude"]
+homepage = "https://weigend.studio"
+repository = "https://github.com/dweigend/joplin-mcp"
+dependencies = [
+    "mcp[cli]",
+    "httpx",
+    "python-dotenv",
+    "requests",
+    "pydantic"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "black>=24.1.1",
+    "mypy>=1.8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/joplin"]
+
+[tool.ruff]
+line-length = 130
+select = [
+    "F",     # Pyflakes (Syntax + Basic Errors)
+    "E",     # Pycodestyle Errors
+    "W",     # Pycodestyle Warnings
+    "I",     # isort
+    "UP",    # pyupgrade (Modern Python Features)
+    "RUF",   # Ruff-specific
+]
+ignore = ["D203", "D213"]
+
+[tool.ruff.pydocstyle]
+convention = "google"
