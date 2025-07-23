@@ -2,6 +2,10 @@
 
 A Model Context Protocol (MCP) Server for [Joplin](https://joplinapp.org/) that enables note access through the [Model Context Protocol](https://modelcontextprotocol.io). Perfect for integration with AI assistants like Claude.
 
+<a href="https://glama.ai/mcp/servers/@dweigend/joplin-mcp-server">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@dweigend/joplin-mcp-server/badge" alt="Joplin Server MCP server" />
+</a>
+
 ## ✨ Features
 
 - 🔍 **Search Notes**: Full-text search across all notes
