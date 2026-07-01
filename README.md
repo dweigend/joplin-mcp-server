@@ -9,6 +9,7 @@ A Model Context Protocol (MCP) Server for [Joplin](https://joplinapp.org/) that 
 - ✏️ **Edit Notes**: Create new notes and update existing ones
 - 🗑️ **Delete Notes**: Move notes to trash or delete permanently
 - 📥 **Markdown Import**: Import markdown files as notes
+- 🏷️ **Tag Management**: List tags, read a note's tags, and tag/untag notes (auto-creating tags)
 - 🤖 **AI Integration**: Seamless integration with Claude and other MCP-capable AI assistants
 
 ## 🚀 Installation
@@ -123,6 +124,37 @@ Import a markdown file as a new note.
 
 **Parameters:**
 - `file_path` (string): Path to the markdown file
+
+### list_tags
+List all tags in Joplin.
+
+**Parameters:** none
+
+### get_note_tags
+Get the tags attached to a note.
+
+**Parameters:**
+- `note_id` (string): ID of the note
+
+### get_tag_notes
+Get the notes carrying a given tag.
+
+**Parameters:**
+- `tag_id` (string): ID of the tag
+
+### add_tag_to_note
+Attach a tag to a note, creating the tag if it does not exist yet (matched case-insensitively).
+
+**Parameters:**
+- `note_id` (string): ID of the note to tag
+- `tag` (string): Tag title
+
+### remove_tag_from_note
+Detach a tag from a note (the tag itself is not deleted).
+
+**Parameters:**
+- `note_id` (string): ID of the note
+- `tag_id` (string): ID of the tag to detach
 
 ## 🧪 Development
 

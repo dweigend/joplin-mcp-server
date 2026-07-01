@@ -31,6 +31,19 @@ class PaginatedResponse(Generic[T]):
     has_more: bool
 
 @dataclass
+class JoplinTag:
+    """Represents a Joplin tag.
+
+    Reference: https://joplinapp.org/help/api/references/rest_api/#tags
+    """
+    id: str
+    title: str
+
+    @classmethod
+    def from_api_response(cls, data: dict[str, Any]) -> "JoplinTag":
+        return cls(id=data["id"], title=data["title"])
+
+@dataclass
 class JoplinNote:
     """Represents a Joplin note with its attributes.
 
@@ -229,6 +242,8 @@ class JoplinAPI:
                 headers=headers
             )
             response.raise_for_status()
+            if not response.content:
+                return {}
             return response.json()
 
         except requests.exceptions.RequestException as e:
@@ -395,3 +410,52 @@ class JoplinAPI:
             items=[JoplinNote.from_api_response(item) for item in response["items"]],
             has_more=response["has_more"]
         )
+
+    def get_tags(self, limit: int = 100) -> list[JoplinTag]:
+        """Get all tags (following pagination)."""
+        tags: list[JoplinTag] = []
+        page = 1
+        while True:
+            response = self._make_request(
+                "GET", "tags", params={"limit": limit, "page": page}
+            )
+            tags.extend(JoplinTag.from_api_response(t) for t in response["items"])
+            if not response.get("has_more"):
+                break
+            page += 1
+        return tags
+
+    def get_note_tags(self, note_id: str) -> list[JoplinTag]:
+        """Get the tags attached to a note."""
+        response = self._make_request("GET", f"notes/{note_id}/tags")
+        return [JoplinTag.from_api_response(t) for t in response["items"]]
+
+    def get_tag_notes(self, tag_id: str) -> list[JoplinNote]:
+        """Get the notes carrying a given tag."""
+        response = self._make_request(
+            "GET", f"tags/{tag_id}/notes", params={"fields": "id,title"}
+        )
+        return [JoplinNote.from_api_response(n) for n in response["items"]]
+
+    def create_tag(self, title: str) -> JoplinTag:
+        """Create a new tag. Titles are lowercased by Joplin."""
+        response = self._make_request("POST", "tags", json={"title": title})
+        return JoplinTag.from_api_response(response)
+
+    def get_or_create_tag(self, title: str) -> JoplinTag:
+        """Return the existing tag matching title (case-insensitive) or create it."""
+        wanted = title.strip().lower()
+        for tag in self.get_tags():
+            if tag.title.lower() == wanted:
+                return tag
+        return self.create_tag(wanted)
+
+    def add_tag_to_note(self, note_id: str, tag_title: str) -> JoplinTag:
+        """Attach a tag to a note by title, creating the tag if needed."""
+        tag = self.get_or_create_tag(tag_title)
+        self._make_request("POST", f"tags/{tag.id}/notes", json={"id": note_id})
+        return tag
+
+    def remove_tag_from_note(self, note_id: str, tag_id: str) -> None:
+        """Detach a tag from a note (does not delete the tag)."""
+        self._make_request("DELETE", f"tags/{tag_id}/notes/{note_id}")

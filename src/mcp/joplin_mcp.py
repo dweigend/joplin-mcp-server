@@ -58,6 +58,16 @@ class ImportMarkdownInput(BaseModel):
     """Input parameters for importing markdown files."""
     file_path: str
 
+class AddTagInput(BaseModel):
+    """Input parameters for tagging a note."""
+    note_id: str
+    tag: str
+
+class RemoveTagInput(BaseModel):
+    """Input parameters for untagging a note."""
+    note_id: str
+    tag_id: str
+
 # MCP Tools
 @mcp.tool()
 async def search_notes(args: SearchNotesInput) -> Dict[str, Any]:
@@ -267,6 +277,127 @@ async def import_markdown(args: ImportMarkdownInput) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Error importing markdown: {e}")
+        return {"error": str(e)}
+
+@mcp.tool()
+async def list_tags() -> Dict[str, Any]:
+    """List all tags in Joplin.
+
+    Returns:
+        Dictionary containing every tag with its id and title
+    """
+    if not api:
+        return {"error": "Joplin API client not initialized"}
+
+    try:
+        tags = api.get_tags()
+        return {
+            "status": "success",
+            "total": len(tags),
+            "tags": [{"id": t.id, "title": t.title} for t in tags]
+        }
+    except Exception as e:
+        logger.error(f"Error listing tags: {e}")
+        return {"error": str(e)}
+
+@mcp.tool()
+async def get_note_tags(note_id: str) -> Dict[str, Any]:
+    """Get the tags attached to a note.
+
+    Args:
+        note_id: ID of the note
+
+    Returns:
+        Dictionary containing the note's tags
+    """
+    if not api:
+        return {"error": "Joplin API client not initialized"}
+
+    try:
+        tags = api.get_note_tags(note_id)
+        return {
+            "status": "success",
+            "note_id": note_id,
+            "tags": [{"id": t.id, "title": t.title} for t in tags]
+        }
+    except Exception as e:
+        logger.error(f"Error getting note tags: {e}")
+        return {"error": str(e)}
+
+@mcp.tool()
+async def get_tag_notes(tag_id: str) -> Dict[str, Any]:
+    """Get the notes carrying a given tag.
+
+    Args:
+        tag_id: ID of the tag
+
+    Returns:
+        Dictionary containing the notes tagged with this tag
+    """
+    if not api:
+        return {"error": "Joplin API client not initialized"}
+
+    try:
+        notes = api.get_tag_notes(tag_id)
+        return {
+            "status": "success",
+            "tag_id": tag_id,
+            "total": len(notes),
+            "notes": [{"id": n.id, "title": n.title} for n in notes]
+        }
+    except Exception as e:
+        logger.error(f"Error getting tag notes: {e}")
+        return {"error": str(e)}
+
+@mcp.tool()
+async def add_tag_to_note(args: AddTagInput) -> Dict[str, Any]:
+    """Attach a tag to a note, creating the tag if it does not exist yet.
+
+    Args:
+        args: Tagging parameters
+            note_id: ID of the note to tag
+            tag: Tag title (matched case-insensitively, created if missing)
+
+    Returns:
+        Dictionary containing the tag that was applied
+    """
+    if not api:
+        return {"error": "Joplin API client not initialized"}
+
+    try:
+        tag = api.add_tag_to_note(note_id=args.note_id, tag_title=args.tag)
+        return {
+            "status": "success",
+            "note_id": args.note_id,
+            "tag": {"id": tag.id, "title": tag.title}
+        }
+    except Exception as e:
+        logger.error(f"Error adding tag to note: {e}")
+        return {"error": str(e)}
+
+@mcp.tool()
+async def remove_tag_from_note(args: RemoveTagInput) -> Dict[str, Any]:
+    """Detach a tag from a note (the tag itself is not deleted).
+
+    Args:
+        args: Untagging parameters
+            note_id: ID of the note
+            tag_id: ID of the tag to detach
+
+    Returns:
+        Dictionary containing the operation status
+    """
+    if not api:
+        return {"error": "Joplin API client not initialized"}
+
+    try:
+        api.remove_tag_from_note(note_id=args.note_id, tag_id=args.tag_id)
+        return {
+            "status": "success",
+            "message": f"Tag {args.tag_id} removed from note {args.note_id}"
+        }
+    except Exception as e:
+        logger.error(f"Error removing tag from note: {e}")
         return {"error": str(e)}
 
 if __name__ == "__main__":
