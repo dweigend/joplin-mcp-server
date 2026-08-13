@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/dweigend-joplin-mcp-server-badge.png)](https://mseep.ai/app/dweigend-joplin-mcp-server)
+
 # 📝 Joplin MCP Server
 
 A Model Context Protocol (MCP) Server for [Joplin](https://joplinapp.org/) that enables note access through the [Model Context Protocol](https://modelcontextprotocol.io). Perfect for integration with AI assistants like Claude.
