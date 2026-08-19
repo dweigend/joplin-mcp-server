@@ -17,13 +17,13 @@ A Model Context Protocol (MCP) Server for [Joplin](https://joplinapp.org/) that 
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.10 or higher (3.14 is tested and does not work with the dependencies) Prefer: 3.12 (`uv venv --python 3.12`)
 - [Joplin Desktop](https://joplinapp.org/) with Web Clipper Service enabled
 - [uv](https://github.com/astral-sh/uv) (Python package manager)
 
 ```bash
 # Clone repository
-git clone https://github.com/dweigend/joplin-mcp.git
+git clone https://github.com/dweigend/joplin-mcp-server
 cd joplin-mcp
 
 # Create and activate virtual environment
@@ -78,6 +78,33 @@ JOPLIN_TOKEN=your_api_token_here
    - Replace `/PATH/TO/YOUR/PROJECT/joplin_mcp` with the absolute path to your project
 
    **Important**: Claude Desktop needs the full path to `uv` as it cannot access shell environment variables.
+
+## Opencode 
+
+### Configure MCP Server 
+Update your OpenCode configuration found in: `~/.config/opencode/opencode.json`
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "joplin": {
+      "type": "local",
+      "command": [
+        "/PATH/TO/UV/uv",
+        "--directory",
+        "/PATH/TO/YOUR/PROJECT/joplin-mcp-server/joplin-mcp",
+        "run",
+        "src/mcp/joplin_mcp.py"
+      ],
+      "enabled": true,
+      "environment": {
+        "JOPLIN_TOKEN": "your_api_token_here"
+      }
+    }
+  }
+}
+```
 
 ## 🛠️ Available Tools
 
