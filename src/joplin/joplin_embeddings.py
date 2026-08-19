@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -158,30 +159,38 @@ class VectorIndex:
 _embedder: Embedder | None = None
 _index: VectorIndex | None = None
 _index_loaded = False
+# Guards the lazy init of the globals above. Once the tool layer offloads the
+# heavy calls to a thread pool, these are touched from more than one thread, so
+# the read-check-assign in each accessor needs to be atomic. RLock so a caller
+# already holding it can re-enter without deadlock.
+_lock = threading.RLock()
 
 
 def get_embedder() -> Embedder:
     """The process-wide embedder, loaded on first use (about 5s)."""
     global _embedder
-    if _embedder is None:
-        _embedder = Embedder()
-    return _embedder
+    with _lock:
+        if _embedder is None:
+            _embedder = Embedder()
+        return _embedder
 
 
 def get_index() -> VectorIndex | None:
     """The cached index, read from disk once. None when never built."""
     global _index, _index_loaded
-    if not _index_loaded:
-        _index = load_index()
-        _index_loaded = True
-    return _index
+    with _lock:
+        if not _index_loaded:
+            _index = load_index()
+            _index_loaded = True
+        return _index
 
 
 def set_index(index: VectorIndex | None) -> None:
     """Install an index as the current one, e.g. straight after a build."""
     global _index, _index_loaded
-    _index = index
-    _index_loaded = True
+    with _lock:
+        _index = index
+        _index_loaded = True
 
 
 def reset_runtime() -> None:
@@ -320,10 +329,26 @@ def build_index(api: Any, embedder: Embedder, previous: VectorIndex | None = Non
 
 
 def save_index(index: VectorIndex, path: Path = INDEX_PATH) -> None:
-    """Persist the index to disk."""
+    """Persist the index to disk.
+
+    Written atomically: each file goes to a temp path and is os.replace()d into
+    place, so a crash or a concurrent reader never sees a half-written file. The
+    npz and its metadata are still two separate files, so load_index validates
+    that the pair is mutually consistent rather than trusting it.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, matrix=index.matrix, chunk_note=index.chunk_note)
-    META_PATH.write_text(
+
+    tmp_npz = path.with_name(path.name + ".tmp")
+    # Pass a file handle, not the path: numpy appends ".npz" to a path that
+    # lacks it, which would corrupt the temp-file name.
+    with open(tmp_npz, "wb") as handle:
+        np.savez_compressed(
+            handle, matrix=index.matrix, chunk_note=index.chunk_note
+        )
+    os.replace(tmp_npz, path)
+
+    tmp_meta = META_PATH.with_name(META_PATH.name + ".tmp")
+    tmp_meta.write_text(
         json.dumps({
             "chunk_texts": index.chunk_texts,
             "note_ids": index.note_ids,
@@ -333,17 +358,18 @@ def save_index(index: VectorIndex, path: Path = INDEX_PATH) -> None:
         }),
         encoding="utf-8",
     )
+    os.replace(tmp_meta, META_PATH)
 
 
 def load_index(path: Path = INDEX_PATH) -> VectorIndex | None:
-    """Load the index, or None when it has not been built yet."""
+    """Load the index, or None when it has not been built or is inconsistent."""
     if not path.exists() or not META_PATH.exists():
         return None
 
     try:
         arrays = np.load(path)
         meta = json.loads(META_PATH.read_text(encoding="utf-8"))
-        return VectorIndex(
+        index = VectorIndex(
             matrix=arrays["matrix"],
             chunk_note=arrays["chunk_note"],
             chunk_texts=meta["chunk_texts"],
@@ -355,6 +381,26 @@ def load_index(path: Path = INDEX_PATH) -> VectorIndex | None:
     except Exception as exc:  # noqa: BLE001 - a corrupt index should rebuild, not crash
         logger.warning(f"Could not load index, treating as absent: {exc}")
         return None
+
+    # A torn write (new npz + stale meta, each individually valid) would load
+    # an index whose arrays disagree and then IndexError at query time. Reject
+    # the mismatch here so it rebuilds instead.
+    chunk_len = index.matrix.shape[0]
+    if not (chunk_len == len(index.chunk_note) == len(index.chunk_texts)):
+        logger.warning("Index chunk arrays disagree in length; rebuilding.")
+        return None
+    note_len = index.note_count
+    if not (note_len == len(index.note_titles) == len(index.note_parents)
+            == len(index.note_stamps)):
+        logger.warning("Index note arrays disagree in length; rebuilding.")
+        return None
+    if index.chunk_count and (
+        int(index.chunk_note.min()) < 0 or int(index.chunk_note.max()) >= note_len
+    ):
+        logger.warning("Index chunk_note references a missing note; rebuilding.")
+        return None
+
+    return index
 
 
 def _best_chunk_per_note(index: VectorIndex, query: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

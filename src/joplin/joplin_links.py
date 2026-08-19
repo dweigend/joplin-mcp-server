@@ -11,6 +11,7 @@ work on a library that has not changed between two calls in the same session.
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
@@ -35,6 +36,11 @@ CACHE_TTL_SECONDS = 300
 DIRECTIONS = ("out", "in", "both")
 MAX_DEPTH = 3
 MAX_LIMIT = 200
+# Cap on nodes whose neighbours get expanded. limit only truncates the output;
+# without this the walk still explores the whole reachable component and, with
+# include_semantic, runs one full similarity search per visited node. Bounding
+# expansions bounds that cost regardless of library size.
+MAX_EXPANSIONS = 500
 
 
 @dataclass
@@ -59,19 +65,32 @@ class LinkGraph:
 
 _cache: LinkGraph | None = None
 _notebook_cache: tuple[float, dict[str, str]] | None = None
+# Serializes cache init/rebuild once the tool layer runs these off-thread, and
+# prevents two callers from each doing a full-graph rebuild at once.
+_lock = threading.RLock()
 
 
 def flatten_notebook_paths(
     notebooks: Iterable[JoplinNotebook],
     prefix: str | None = None,
+    _visited: set[str] | None = None,
 ) -> dict[str, str]:
     """Map each notebook id to its full slash-separated path."""
     paths: dict[str, str] = {}
+    # Joplin enforces a tree, but a malformed API response with a parent cycle
+    # would otherwise recurse until the stack is exhausted. Skip any id already
+    # on the current path.
+    visited = _visited if _visited is not None else set()
 
     for notebook in notebooks:
+        if notebook.id in visited:
+            continue
+        visited.add(notebook.id)
         path = f"{prefix}/{notebook.title}" if prefix else notebook.title
         paths[notebook.id] = path
-        paths.update(flatten_notebook_paths(notebook.children or [], path))
+        paths.update(
+            flatten_notebook_paths(notebook.children or [], path, visited)
+        )
 
     return paths
 
@@ -80,17 +99,18 @@ def get_notebook_paths(api: JoplinAPI) -> dict[str, str]:
     """Notebook id to full path, cached briefly. Notebook trees change rarely."""
     global _notebook_cache
 
-    if _notebook_cache and (time.monotonic() - _notebook_cache[0]) < CACHE_TTL_SECONDS:
-        return _notebook_cache[1]
+    with _lock:
+        if _notebook_cache and (time.monotonic() - _notebook_cache[0]) < CACHE_TTL_SECONDS:
+            return _notebook_cache[1]
 
-    try:
-        paths = flatten_notebook_paths(api.list_notebooks())
-    except Exception as exc:  # noqa: BLE001 - paths are a nicety, not a requirement
-        logger.warning(f"Could not resolve notebook paths: {exc}")
-        return _notebook_cache[1] if _notebook_cache else {}
+        try:
+            paths = flatten_notebook_paths(api.list_notebooks())
+        except Exception as exc:  # noqa: BLE001 - paths are a nicety, not a requirement
+            logger.warning(f"Could not resolve notebook paths: {exc}")
+            return _notebook_cache[1] if _notebook_cache else {}
 
-    _notebook_cache = (time.monotonic(), paths)
-    return paths
+        _notebook_cache = (time.monotonic(), paths)
+        return paths
 
 
 def corpus_fingerprint(api: JoplinAPI) -> str:
@@ -156,22 +176,33 @@ def get_link_graph(api: JoplinAPI, refresh: bool = False) -> LinkGraph:
     """Return the cached graph, rebuilding it when the library has moved on."""
     global _cache
 
-    if refresh or _cache is None:
-        _cache = build_link_graph(api)
-        _cache.fingerprint = corpus_fingerprint(api)
+    with _lock:
+        if refresh or _cache is None:
+            return _rebuild_locked(api)
+
+        expired = (time.monotonic() - _cache.built_at) > CACHE_TTL_SECONDS
+        try:
+            changed = corpus_fingerprint(api) != _cache.fingerprint
+        except Exception as exc:  # noqa: BLE001 - a stale graph beats a failed call
+            logger.warning(f"Could not check for changes, serving cached graph: {exc}")
+            changed = False
+
+        if expired or changed:
+            return _rebuild_locked(api)
+
         return _cache
 
-    expired = (time.monotonic() - _cache.built_at) > CACHE_TTL_SECONDS
-    try:
-        changed = corpus_fingerprint(api) != _cache.fingerprint
-    except Exception as exc:  # noqa: BLE001 - a stale graph beats a failed call
-        logger.warning(f"Could not check for changes, serving cached graph: {exc}")
-        changed = False
 
-    if expired or changed:
-        _cache = build_link_graph(api)
-        _cache.fingerprint = corpus_fingerprint(api)
+def _rebuild_locked(api: JoplinAPI) -> LinkGraph:
+    """Build a graph, fingerprint included, then publish it. Call under _lock.
 
+    The fingerprint is set before the graph is assigned to _cache so no reader
+    can observe a published graph whose fingerprint is still unset.
+    """
+    global _cache
+    graph = build_link_graph(api)
+    graph.fingerprint = corpus_fingerprint(api)
+    _cache = graph
     return _cache
 
 
@@ -239,10 +270,16 @@ def find_neighbours(
     seen = {note_id}
     frontier = [note_id]
     found: list[dict[str, Any]] = []
+    expansions = 0
+    capped = False
 
     for hop in range(1, depth + 1):
         next_frontier: list[str] = []
         for current in frontier:
+            if expansions >= MAX_EXPANSIONS:
+                capped = True
+                break
+            expansions += 1
             relations = _neighbours_of(graph, current, direction)
             scores: dict[str, float] = {}
             if semantic_provider is not None:
@@ -269,9 +306,15 @@ def find_neighbours(
                 if relation == "semantic":
                     entry["score"] = round(scores[neighbour], 4)
                 found.append(entry)
-        if not next_frontier:
+        if capped or not next_frontier:
             break
         frontier = next_frontier
+
+    if capped:
+        logger.info(
+            "find_neighbours hit the %d-expansion cap for %s; results partial",
+            MAX_EXPANSIONS, note_id,
+        )
 
     found.sort(key=lambda item: (item["depth"], item["title"].lower()))
 
@@ -282,6 +325,6 @@ def find_neighbours(
             "notebook": graph.notebooks.get(note_id, ""),
         },
         "total": len(found),
-        "truncated": len(found) > limit,
+        "truncated": capped or len(found) > limit,
         "links": found[:limit],
     }
